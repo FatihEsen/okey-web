@@ -62,9 +62,9 @@ export const Board = ({
   onSetClick: (playerId: string, setIdx: number, type: "set" | "pair") => void;
 }) => {
   return (
-    <div className="flex gap-3 w-full">
+    <div className="flex gap-3 w-full h-full">
       {/* Seri 1 */}
-      <div className="flex-1 bg-emerald-500/20 dark:bg-emerald-500/10 rounded-xl border-2 border-emerald-500/30 p-3 min-h-[180px] overflow-y-auto custom-scrollbar">
+      <div className="flex-1 bg-emerald-500/20 dark:bg-emerald-500/10 rounded-xl border-2 border-emerald-500/30 p-3 min-h-[180px] h-full overflow-y-auto custom-scrollbar">
         <div className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider mb-2 text-center">
           SERİ 1
         </div>
@@ -96,7 +96,7 @@ export const Board = ({
       </div>
 
       {/* Seri 2 */}
-      <div className="flex-1 bg-emerald-500/20 dark:bg-emerald-500/10 rounded-xl border-2 border-emerald-500/30 p-3 min-h-[180px] overflow-y-auto custom-scrollbar">
+      <div className="flex-1 bg-emerald-500/20 dark:bg-emerald-500/10 rounded-xl border-2 border-emerald-500/30 p-3 min-h-[180px] h-full overflow-y-auto custom-scrollbar">
         <div className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider mb-2 text-center">
           SERİ 2
         </div>
@@ -127,37 +127,47 @@ export const Board = ({
         </div>
       </div>
 
-      {/* Çiftler - 3 sütun */}
-      <div className="w-64 bg-purple-500/20 dark:bg-purple-500/10 rounded-xl border-2 border-purple-500/30 p-3 min-h-[180px] overflow-y-auto custom-scrollbar">
-        <div className="text-[10px] font-bold text-purple-400 uppercase tracking-wider mb-2 text-center">
-          ÇİFTLER
-        </div>
-        <div className="grid grid-cols-3 gap-2">
-          {gameState.players
-            .filter((p) => p.openedPairs.length > 0)
-            .flatMap((player) =>
-              player.openedPairs.map((pair, i) => ({ player, pair, i }))
-            )
-            .map(({ player, pair, i }) => (
-              <div
-                key={`pair-${player.id}-${i}`}
-                className="flex flex-col items-center gap-1"
-              >
-                <DroppableSet
-                  playerId={player.id}
-                  setIdx={i}
-                  type="pair"
-                  tiles={pair}
-                  onSetClick={onSetClick}
-                />
-              </div>
-            ))}
-          {gameState.players.every((p) => p.openedPairs.length === 0) && (
-            <div className="col-span-3 text-slate-600 text-xs text-center py-8">
-              Henüz çift yok
+    </div>
+  );
+};
+
+export const PairsBoard = ({
+  gameState,
+  onSetClick,
+}: {
+  gameState: GameState;
+  onSetClick: (playerId: string, setIdx: number, type: "set" | "pair") => void;
+}) => {
+  return (
+    <div className="flex-1 bg-purple-500/20 dark:bg-purple-500/10 rounded-xl border-2 border-purple-500/30 p-3 min-h-[180px] h-full overflow-y-auto custom-scrollbar">
+      <div className="text-[10px] font-bold text-purple-400 uppercase tracking-wider mb-2 text-center">
+        ÇİFTLER
+      </div>
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-2 xl:grid-cols-3 gap-2">
+        {gameState.players
+          .filter((p) => p.openedPairs.length > 0)
+          .flatMap((player) =>
+            player.openedPairs.map((pair, i) => ({ player, pair, i }))
+          )
+          .map(({ player, pair, i }) => (
+            <div
+              key={`pair-${player.id}-${i}`}
+              className="flex flex-col items-center gap-1"
+            >
+              <DroppableSet
+                playerId={player.id}
+                setIdx={i}
+                type="pair"
+                tiles={pair}
+                onSetClick={onSetClick}
+              />
             </div>
-          )}
-        </div>
+          ))}
+        {gameState.players.every((p) => p.openedPairs.length === 0) && (
+          <div className="col-span-full text-slate-600 text-xs text-center py-8">
+            Henüz çift yok
+          </div>
+        )}
       </div>
     </div>
   );

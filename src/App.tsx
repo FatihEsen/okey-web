@@ -69,6 +69,7 @@ import {
   calculateHandTotal,
   calculateSetScore,
   calculateFinalScores,
+  getFinishType,
   getScoreExplanation,
   sortBySets,
   sortByPairs,
@@ -80,7 +81,7 @@ import {
 } from "./logic/okeyEngine";
 import { TileComponent, SortableTile } from "./components/TileComponent";
 import { PlayerHand } from "./components/PlayerHand";
-import { Board } from "./components/Board";
+import { Board, PairsBoard } from "./components/Board";
 import {
   DraggableDeck,
   DroppableDiscard,
@@ -495,12 +496,13 @@ export default function App() {
 
     const isWin = newPlayers[gameState.currentPlayerIndex].hand.every(t => t === null);
     const isOkeyFinish = isWin && isOkeyLike(tile, gameState.okeyTile);
-    const isPairFinish = isWin && player.openedWithPairs;
+    const isHandFinish = isWin && player.openedSets.length === 0 && player.openedPairs.length === 0;
     let winMsg = `${player.name} ${tile.number} ${tile.color} attı.`;
     if (isWin) {
-      if (isOkeyFinish) winMsg += " OKEY ile bitirdi! (Çift ceza)";
-      else if (isPairFinish) winMsg += " ÇİFT ile bitirdi! (Çift ceza)";
-      else winMsg += " OYUN BİTTİ!";
+      if (isHandFinish && isOkeyFinish) winMsg += " ELDEN + OKEY ile bitirdi! (-404, ×4 ceza)";
+      else if (isHandFinish) winMsg += " ELDEN bitirdi! (-202, ×2 ceza)";
+      else if (isOkeyFinish) winMsg += " OKEY ile bitirdi! (-202, ×2 ceza)";
+      else winMsg += " Normal bitiş! (-101)";
     }
 
     // --- Katlama durumu takibi ---
@@ -891,12 +893,40 @@ export default function App() {
         targetSet.tiles.push(tile);
         // Sort the set so it displays correctly
         if (targetSet.type === "run") {
-          // 101 Okey: Ace is always low (1) since 13-1 is forbidden.
-          targetSet.tiles.sort((a, b) => {
-            const valA = getEffectiveTile(a, gameState.okeyTile).number;
-            const valB = getEffectiveTile(b, gameState.okeyTile).number;
-            return valA - valB;
-          });
+          // Harika Sıralama Algoritması: Mevcut setteki her taşın temsil ettiği sayıyı indeksinden hesapla.
+          // Yeni eklenen taşın temsil ettiği sayı ise kendi sayısıdır.
+          // Ardından hepsini temsil edilen sayıya göre sırala.
+          
+          // Yeni taşı geçici olarak çıkardık (çünkü targetSet'e çoktan push yapılmıştı)
+          const addedTile = targetSet.tiles.pop()!;
+          
+          const normalIdx = targetSet.tiles.findIndex(t => !isWildcard(t, gameState.okeyTile));
+          
+          if (normalIdx !== -1) {
+            const anchorNumber = getEffectiveTile(targetSet.tiles[normalIdx], gameState.okeyTile).number;
+            
+            // Mevcut taşlara temsil edilen numaralarını (representedNum) atayalım
+            const tilesWithRep = targetSet.tiles.map((t, idx) => ({
+              tile: t,
+              rep: anchorNumber + (idx - normalIdx)
+            }));
+            
+            // Yeni taşı ekleyelim
+            tilesWithRep.push({
+              tile: addedTile,
+              rep: getEffectiveTile(addedTile, gameState.okeyTile).number
+            });
+            
+            // Sıralayalım
+            tilesWithRep.sort((a, b) => a.rep - b.rep);
+            
+            // Sete geri koyalım
+            targetSet.tiles = tilesWithRep.map(item => item.tile);
+          } else {
+            // Hiç normal taş yoksa (sadece okeyler), ki bu imkansız ama yine de:
+            targetSet.tiles.push(addedTile);
+          }
+
         } else if (targetSet.type === "group") {
           // Sort groups by color for consistent display
           const colorOrder = [Color.RED, Color.YELLOW, Color.BLACK, Color.BLUE, Color.JOKER];
@@ -1174,158 +1204,174 @@ export default function App() {
       </header>
 
       <main className="max-w-7xl mx-auto p-4 flex flex-col gap-4">
-        {/* Board Area - Full Width */}
-        <div className="w-full">
-          <Board gameState={gameState} onSetClick={processTile} />
+        
+        {/* Satır 1: Seriler ve Çiftler (Yükseklikleri senkronize olacak) */}
+        <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 items-stretch">
+          {/* Board Area (Seri 1 ve Seri 2) */}
+          <div className="lg:col-span-3 h-full">
+            <Board gameState={gameState} onSetClick={processTile} />
+          </div>
+          {/* Çiftler */}
+          <div className="lg:col-span-1 h-full">
+            <PairsBoard gameState={gameState} onSetClick={processTile} />
+          </div>
         </div>
 
-        {/* Horizontal Controls Bar */}
-        <div className={`rounded-xl p-2 shadow-sm border flex items-center justify-between gap-3 ${isDarkMode ? "bg-slate-900 border-slate-800" : "bg-white border-slate-200"}`}>
-          <div className="flex items-center gap-2">
-            {/* Tile discarded to me */}
-            <div className="flex flex-col items-center gap-0.5">
-              <span className="text-[7px] font-bold text-slate-500 uppercase">Bana Atılan</span>
-              <DraggableDiscard 
-                tile={gameState.discardPile.length > 0 ? gameState.discardPile[gameState.discardPile.length - 1] : null} 
-                isDarkMode={isDarkMode}
-                isDisabled={gameState.phase !== GamePhase.DRAWING || currentPlayer.isAI}
-                onClick={drawFromDiscard}
-              />
+        {/* Satır 2: Kontroller, Istaka ve Oyun Akışı */}
+        <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 items-stretch">
+          
+          {/* Sol Kolon: Kontroller ve Istaka */}
+          <div className="lg:col-span-3 flex flex-col gap-4">
+            {/* Horizontal Controls Bar (Bana Atılan, Deste vs) */}
+            <div className={`rounded-xl p-2 shadow-sm border flex items-center justify-between gap-3 ${isDarkMode ? "bg-slate-900 border-slate-800" : "bg-white border-slate-200"}`}>
+              <div className="flex items-center gap-2">
+                {/* Tile discarded to me */}
+                <div className="flex flex-col items-center gap-0.5">
+                  <span className="text-[7px] font-bold text-slate-500 uppercase">Bana Atılan</span>
+                  <DraggableDiscard 
+                    tile={gameState.discardPile.length > 0 ? gameState.discardPile[gameState.discardPile.length - 1] : null} 
+                    isDarkMode={isDarkMode}
+                    isDisabled={gameState.phase !== GamePhase.DRAWING || currentPlayer.isAI}
+                    onClick={drawFromDiscard}
+                  />
+                </div>
+
+                <div className={`w-px h-10 ${isDarkMode ? "bg-slate-800" : "bg-slate-200"}`} />
+
+                {/* Deck */}
+                <DraggableDeck 
+                  count={gameState.deck.length} 
+                  isDisabled={gameState.phase !== GamePhase.DRAWING || currentPlayer.isAI}
+                  onClick={drawFromDeck}
+                />
+
+                {currentPlayer.mustOpen && !currentPlayer.hasOpened && (
+                  <ReturnDiscardButton
+                    onReturn={returnDrawnTile}
+                    disabled={gameState.phase !== GamePhase.PLAYING || currentPlayer.isAI}
+                  />
+                )}
+              </div>
+
+              {/* Indicator */}
+              <DisplayIndicator indicator={gameState.indicator!} isDarkMode={isDarkMode} />
+
+              {/* Discarded count */}
+              <div className="flex items-center gap-3">
+                <div className="flex flex-col gap-0.5">
+                  <span className="text-[7px] font-bold text-slate-500 uppercase">ATILANLAR</span>
+                  <div className="flex gap-2">
+                    {[Color.RED, Color.YELLOW, Color.BLUE, Color.BLACK].map(color => (
+                      <div key={color} className="flex flex-col items-center">
+                        <div className={`w-2 h-1 rounded-full mb-0.5 ${
+                          color === Color.RED ? "bg-red-500" :
+                          color === Color.YELLOW ? "bg-yellow-500" :
+                          color === Color.BLUE ? "bg-blue-500" : "bg-slate-900 dark:bg-slate-100"
+                        }`} />
+                        <div className="text-[8px] font-black text-slate-500 leading-none">
+                          {gameState.discardPile.filter(t => t.color === color).length}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className={`w-px h-10 ${isDarkMode ? "bg-slate-800" : "bg-slate-200"}`} />
+
+                {/* My discard */}
+                <DroppableDiscard 
+                  id="discard-drop-zone"
+                  label="Taş At"
+                  lastDiscard={gameState.players[0].lastDiscardedTile}
+                  isDarkMode={isDarkMode}
+                  disabled={gameState.phase !== GamePhase.PLAYING || currentPlayer.isAI || selectedTiles.length !== 1}
+                  onClick={() => {
+                    if (selectedTiles.length === 1) {
+                      const player = gameState.players[gameState.currentPlayerIndex];
+                      const tile = player.hand.find(t => t?.id === selectedTiles[0]);
+                      if (tile) {
+                        discardTile(tile);
+                      }
+                    }
+                  }}
+                />
+              </div>
             </div>
 
-            <div className={`w-px h-10 ${isDarkMode ? "bg-slate-800" : "bg-slate-200"}`} />
-
-            {/* Deck */}
-            <DraggableDeck 
-              count={gameState.deck.length} 
-              isDisabled={gameState.phase !== GamePhase.DRAWING || currentPlayer.isAI}
-              onClick={drawFromDeck}
-            />
-
-            {currentPlayer.mustOpen && !currentPlayer.hasOpened && (
-              <ReturnDiscardButton
-                onReturn={returnDrawnTile}
-                disabled={gameState.phase !== GamePhase.PLAYING || currentPlayer.isAI}
+            {/* Istaka */}
+            <div className="w-full">
+              <PlayerHand 
+                player={gameState.players[0]} 
+                okeyTile={gameState.okeyTile}
+                onTileClick={handleTileClick}
+                selectedTiles={selectedTiles}
+                isCurrentPlayer={gameState.currentPlayerIndex === 0}
+                onHandReorder={(newHand) => {
+                  const newPlayers = gameState.players.map((p, i) => i === 0 ? { ...p, hand: newHand } : p);
+                  setGameState({ ...gameState, players: newPlayers });
+                }}
+                onSortSets={autoSortSets}
+                onSortPairs={autoSortPairs}
+                onOpenSets={tryToOpen}
+                onOpenPairs={tryToOpenPairs}
+                onUndoOpen={undoAllOpens}
+                openedSets={gameState.players[0].openedSets}
               />
-            )}
+            </div>
           </div>
 
-          {/* Indicator */}
-          <DisplayIndicator indicator={gameState.indicator!} isDarkMode={isDarkMode} />
+          {/* Sağ Kolon: Oyun Akışı */}
+          <div className="lg:col-span-1 flex flex-col h-full">
+            <div className={`rounded-2xl p-4 shadow-sm border flex flex-col h-full ${isDarkMode ? "bg-slate-900 border-slate-800" : "bg-white border-slate-200"}`}>
+              <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3 flex items-center gap-2">
+                <ChevronRight size={14} /> OYUN AKIŞI
+              </h3>
+              <div className="flex-1 overflow-y-auto space-y-1.5 pr-2 custom-scrollbar max-h-[150px] mb-4">
+                {gameState.logs.slice().reverse().map((log, i) => {
+                  const isPenalty = log.includes("ceza") || log.includes("Ceza");
+                  return (
+                    <div key={i} className={`text-[10px] p-1.5 rounded-lg ${
+                      i === 0 
+                        ? (isPenalty 
+                          ? "bg-red-900/30 text-red-400 font-bold" 
+                          : (isDarkMode ? "bg-blue-900/30 text-blue-400 font-bold" : "bg-blue-50 text-blue-700 font-bold"))
+                        : (isPenalty ? "text-red-500" : "text-slate-500")
+                    }`}>
+                      {log}
+                    </div>
+                  );
+                })}
+              </div>
 
-          {/* Discarded count */}
-          <div className="flex items-center gap-3">
-            <div className="flex flex-col gap-0.5">
-              <span className="text-[7px] font-bold text-slate-500 uppercase">ATILANLAR</span>
-              <div className="flex gap-2">
-                {[Color.RED, Color.YELLOW, Color.BLUE, Color.BLACK].map(color => (
-                  <div key={color} className="flex flex-col items-center">
-                    <div className={`w-2 h-1 rounded-full mb-0.5 ${
-                      color === Color.RED ? "bg-red-500" :
-                      color === Color.YELLOW ? "bg-yellow-500" :
-                      color === Color.BLUE ? "bg-blue-500" : "bg-slate-900 dark:bg-slate-100"
-                    }`} />
-                    <div className="text-[8px] font-black text-slate-500 leading-none">
-                      {gameState.discardPile.filter(t => t.color === color).length}
+              <div className={`w-full h-px mb-4 ${isDarkMode ? "bg-slate-800" : "bg-slate-100"}`} />
+
+              <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3 flex items-center gap-2">
+                <Trophy size={14} className="text-yellow-500" /> ANLIK CEZA PUANLARI
+              </h3>
+              <div className="space-y-2 mb-4">
+                {gameState.players.map(p => (
+                  <div key={p.id} className={`flex items-center justify-between p-2 rounded-xl border ${isDarkMode ? "bg-slate-900/50 border-slate-800" : "bg-slate-50 border-slate-100"}`}>
+                    <div className="flex flex-col">
+                      <span className={`text-xs font-bold ${isDarkMode ? "text-slate-300" : "text-slate-700"}`}>{p.name}</span>
+                      <div className="flex gap-1 mt-0.5">
+                        {p.hasOpened ? (
+                          <span className="text-[8px] px-1.5 py-0.5 bg-blue-500/10 text-blue-500 rounded-full font-black border border-blue-500/20">AÇTI</span>
+                        ) : (
+                          <span className="text-[8px] px-1.5 py-0.5 bg-red-500/10 text-red-500 rounded-full font-black border border-red-500/20">AÇMADI</span>
+                        )}
+                        {p.openedWithPairs && (
+                          <span className="text-[8px] px-1.5 py-0.5 bg-purple-500/10 text-purple-500 rounded-full font-black border border-purple-500/20">ÇİFT</span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <span className={`text-sm font-black ${p.score > 0 ? "text-red-500" : "text-emerald-500"}`}>
+                        {p.score > 0 ? `+${p.score}` : p.score}
+                      </span>
                     </div>
                   </div>
                 ))}
               </div>
-            </div>
-
-            <div className={`w-px h-10 ${isDarkMode ? "bg-slate-800" : "bg-slate-200"}`} />
-
-            {/* My discard */}
-            <DroppableDiscard 
-              id="discard-drop-zone"
-              label="Taş At"
-              lastDiscard={gameState.players[0].lastDiscardedTile}
-              isDarkMode={isDarkMode}
-              disabled={gameState.phase !== GamePhase.PLAYING || currentPlayer.isAI || selectedTiles.length !== 1}
-              onClick={() => {
-                if (selectedTiles.length === 1) {
-                  const player = gameState.players[gameState.currentPlayerIndex];
-                  const tile = player.hand.find(t => t?.id === selectedTiles[0]);
-                  if (tile) {
-                    discardTile(tile);
-                  }
-                }
-              }}
-            />
-          </div>
-        </div>
-
-
-        {/* Bottom: Player Rack & Game Flow */}
-        <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
-          <div className="lg:col-span-3">
-            <PlayerHand 
-              player={gameState.players[0]} 
-              okeyTile={gameState.okeyTile}
-              onTileClick={handleTileClick}
-              selectedTiles={selectedTiles}
-              isCurrentPlayer={gameState.currentPlayerIndex === 0}
-              onHandReorder={(newHand) => {
-                const newPlayers = gameState.players.map((p, i) => i === 0 ? { ...p, hand: newHand } : p);
-                setGameState({ ...gameState, players: newPlayers });
-              }}
-              onSortSets={autoSortSets}
-              onSortPairs={autoSortPairs}
-              onOpenSets={tryToOpen}
-              onOpenPairs={tryToOpenPairs}
-              openedSets={gameState.players[0].openedSets}
-            />
-          </div>
-          
-          <div className={`lg:col-span-1 rounded-2xl p-4 shadow-sm border flex flex-col h-full ${isDarkMode ? "bg-slate-900 border-slate-800" : "bg-white border-slate-200"}`}>
-            <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3 flex items-center gap-2">
-              <ChevronRight size={14} /> OYUN AKIŞI
-            </h3>
-            <div className="flex-1 overflow-y-auto space-y-1.5 pr-2 custom-scrollbar max-h-[150px] mb-4">
-              {gameState.logs.slice().reverse().map((log, i) => {
-                const isPenalty = log.includes("ceza") || log.includes("Ceza");
-                return (
-                  <div key={i} className={`text-[10px] p-1.5 rounded-lg ${
-                    i === 0 
-                      ? (isPenalty 
-                        ? "bg-red-900/30 text-red-400 font-bold" 
-                        : (isDarkMode ? "bg-blue-900/30 text-blue-400 font-bold" : "bg-blue-50 text-blue-700 font-bold"))
-                      : (isPenalty ? "text-red-500" : "text-slate-500")
-                  }`}>
-                    {log}
-                  </div>
-                );
-              })}
-            </div>
-
-            <div className={`w-full h-px mb-4 ${isDarkMode ? "bg-slate-800" : "bg-slate-100"}`} />
-
-            <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3 flex items-center gap-2">
-              <Trophy size={14} className="text-yellow-500" /> ANLIK CEZA PUANLARI
-            </h3>
-            <div className="space-y-2 mb-4">
-              {gameState.players.map(p => (
-                <div key={p.id} className={`flex items-center justify-between p-2 rounded-xl border ${isDarkMode ? "bg-slate-900/50 border-slate-800" : "bg-slate-50 border-slate-100"}`}>
-                  <div className="flex flex-col">
-                    <span className={`text-xs font-bold ${isDarkMode ? "text-slate-300" : "text-slate-700"}`}>{p.name}</span>
-                    <div className="flex gap-1 mt-0.5">
-                      {p.hasOpened ? (
-                        <span className="text-[8px] px-1.5 py-0.5 bg-blue-500/10 text-blue-500 rounded-full font-black border border-blue-500/20">AÇTI</span>
-                      ) : (
-                        <span className="text-[8px] px-1.5 py-0.5 bg-red-500/10 text-red-500 rounded-full font-black border border-red-500/20">AÇMADI</span>
-                      )}
-                      {p.openedWithPairs && (
-                        <span className="text-[8px] px-1.5 py-0.5 bg-purple-500/10 text-purple-500 rounded-full font-black border border-purple-500/20">ÇİFT</span>
-                      )}
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <span className={`text-sm font-black ${p.score > 0 ? "text-red-500" : "text-emerald-500"}`}>
-                      {p.score > 0 ? `+${p.score}` : p.score}
-                    </span>
-                  </div>
-                </div>
-              ))}
             </div>
           </div>
         </div>
@@ -1431,10 +1477,11 @@ export default function App() {
                   {(() => {
                     const discardedTile = gameState.discardPile.length > 0 ? gameState.discardPile[gameState.discardPile.length - 1] : null;
                     const finalScores = calculateFinalScores(gameState, gameState.winnerId, discardedTile);
+                    const finishType = getFinishType(gameState, gameState.winnerId, discardedTile);
                     return gameState.players.map(p => {
                       const score = finalScores[p.id];
                       const isWinner = p.id === gameState.winnerId;
-                      const explanation = getScoreExplanation(score, isWinner, p.hasOpened);
+                      const explanation = getScoreExplanation(score, isWinner, p.hasOpened, isWinner ? finishType : undefined);
                       return (
                         <div key={p.id} className={`flex items-center justify-between p-3 rounded-xl ${isWinner ? (isDarkMode ? 'bg-yellow-900/20 border-yellow-800' : 'bg-yellow-100 border-yellow-200') : (isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200')}`}>
                           <div className="flex flex-col">

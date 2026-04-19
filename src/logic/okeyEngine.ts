@@ -63,7 +63,7 @@ export const getEffectiveTile = (tile: Tile, okeyTile: { number: number; color: 
 export const getTileScore = (tile: Tile, okeyTile: { number: number; color: Color } | null): number => {
   if (isRealOkey(tile, okeyTile)) return 101;
   const effective = getEffectiveTile(tile, okeyTile);
-  return effective.number === 1 ? 11 : effective.number;
+  return effective.number;
 };
 
 const getRunCandidateNumbers = (startNum: number, length: number): number[] | null => {
@@ -98,7 +98,7 @@ export const calculateSetScore = (set: Combination, okeyTile: { number: number; 
         const normalTile = set.tiles.find(t => !isWildcard(t, okeyTile));
         if (!normalTile) return 0;
         const effective = getEffectiveTile(normalTile, okeyTile);
-        let val = effective.number === 1 ? 11 : effective.number;
+        let val = effective.number;
         return val * set.tiles.length;
     } else {
         const normalTiles = set.tiles.filter(t => !isWildcard(t, okeyTile));
@@ -299,9 +299,6 @@ export const sortBySets = (hand: (Tile | null)[], okeyTile: { number: number; co
     pos++; 
   });
 
-  if (pos < 15) pos = 15; 
-  else pos++;
-
   const leftovers = [...remainingTiles].sort((a, b) => {
     const effA = getEffectiveTile(a, okeyTile);
     const effB = getEffectiveTile(b, okeyTile);
@@ -309,8 +306,10 @@ export const sortBySets = (hand: (Tile | null)[], okeyTile: { number: number; co
     return effA.number - effB.number;
   });
 
+  let leftoverPos = Math.max(pos, 30 - leftovers.length);
+
   leftovers.forEach(t => {
-    if (pos < 30) result[pos++] = t;
+    if (leftoverPos < 30) result[leftoverPos++] = t;
   });
   
   return result;
@@ -330,22 +329,40 @@ export const canProcessTile = (tile: Tile, set: Combination, okeyTile: { number:
 export const canSwapOkey = (tile: Tile, set: Combination, okeyTile: { number: number; color: Color } | null): boolean => {
   if (isWildcard(tile, okeyTile)) return false;
   if (!set.tiles.some(t => isWildcard(t, okeyTile))) return false;
+
   if (set.type === "group") {
-    if (set.tiles.length !== 4) return false;
+    // Grup: koyulan taşın sayısı, grubu oluşturan sayıyla aynı olmalı
+    // ve rengi henüz grupta yoksa swap yapılabilir.
     const normalTiles = set.tiles.filter(t => !isWildcard(t, okeyTile));
-    const existingColors = normalTiles.map(t => t.color);
-    if (existingColors.includes(tile.color)) return false;
+    if (normalTiles.length === 0) return false;
+    const groupNumber = getEffectiveTile(normalTiles[0], okeyTile).number;
+    const eff = getEffectiveTile(tile, okeyTile);
+    if (eff.number !== groupNumber) return false;
+    const existingColors = normalTiles.map(t => getEffectiveTile(t, okeyTile).color);
+    if (existingColors.includes(eff.color)) return false;
     return true;
   }
-  for (let i = 0; i < set.tiles.length; i++) {
-    if (isWildcard(set.tiles[i], okeyTile)) {
-      const testTiles = [...set.tiles];
-      testTiles[i] = tile;
-      if (set.type === "run" && isValidRun(testTiles, okeyTile)) return true;
-    }
-  }
-  return false;
+
+  // Run: okeyin tam olarak temsil ettiği sayı+renk ile eşleşmeli.
+  const normalIdx = set.tiles.findIndex(t => !isWildcard(t, okeyTile));
+  if (normalIdx === -1) return false;
+
+  const anchorNumber = getEffectiveTile(set.tiles[normalIdx], okeyTile).number;
+  const runColor = getEffectiveTile(set.tiles[normalIdx], okeyTile).color;
+
+  // Koyulan taşın rengi run'ın rengiyle aynı mı?
+  if (tile.color !== runColor) return false;
+
+  // Setteki okeylerin temsil ettiği beklenen sayıları bul
+  const okeyExpectedNumbers = set.tiles
+    .map((t, idx) => ({ isWild: isWildcard(t, okeyTile), expectedNum: anchorNumber + (idx - normalIdx) }))
+    .filter(x => x.isWild)
+    .map(x => x.expectedNum);
+
+  return okeyExpectedNumbers.includes(tile.number);
+
 };
+
 
 export const canProcessPair = (pair: Tile[], okeyTile: { number: number; color: Color } | null): boolean => {
   if (pair.length !== 2) return false;
@@ -428,6 +445,7 @@ export const aiTakeTurn = (gameState: GameState): Partial<GameState> | null => {
     } else {
       currentPlayer.openedSets = [...currentPlayer.openedSets, ...sets];
     }
+
     sets.forEach(set => {
       set.tiles.forEach(t => {
         const idx = currentPlayer.hand.findIndex(ht => ht?.id === t.id);
@@ -494,8 +512,8 @@ export const aiTakeTurn = (gameState: GameState): Partial<GameState> | null => {
   
   if (safeTiles.length > 0) {
     const highestSafeTile = safeTiles.reduce((max, t) => {
-      const maxVal = max.number === 1 ? 11 : max.number;
-      const tVal = t.number === 1 ? 11 : t.number;
+      const maxVal = max.number;
+      const tVal = t.number;
       return tVal > maxVal ? t : max;
     });
     discardIdx = currentPlayer.hand.findIndex(t => t?.id === highestSafeTile.id);
@@ -520,10 +538,11 @@ export const aiTakeTurn = (gameState: GameState): Partial<GameState> | null => {
 
   if (currentPlayer.hand.every(t => t === null)) {
     const isOkeyFinish = isWildcard(discarded, gameState.okeyTile);
-    const isPairFinish = currentPlayer.openedWithType === 'pairs';
-    let winMsg = `${currentPlayer.name} oyunu bitirdi!`;
-    if (isOkeyFinish) winMsg = `${currentPlayer.name} OKEY ile bitirdi! (Çift ceza)`;
-    else if (isPairFinish) winMsg = `${currentPlayer.name} ÇİFT ile bitirdi! (Çift ceza)`;
+    const isHandFinish = currentPlayer.openedSets.length === 0 && currentPlayer.openedPairs.length === 0;
+    let winMsg = `${currentPlayer.name} oyunu bitirdi! (-101)`;
+    if (isHandFinish && isOkeyFinish) winMsg = `${currentPlayer.name} ELDEN + OKEY ile bitirdi! (-404, ×4 ceza)`;
+    else if (isHandFinish) winMsg = `${currentPlayer.name} ELDEN bitirdi! (-202, ×2 ceza)`;
+    else if (isOkeyFinish) winMsg = `${currentPlayer.name} OKEY ile bitirdi! (-202, ×2 ceza)`;
 
     return {
       players,
@@ -531,9 +550,6 @@ export const aiTakeTurn = (gameState: GameState): Partial<GameState> | null => {
       logs: [...logs, winMsg],
       phase: GamePhase.FINISHED,
       winnerId: currentPlayer.id,
-      hasOkeyDiscard: gameState.hasOkeyDiscard || isRealOkey(discarded, gameState.okeyTile),
-      hasHandFinish: currentPlayer.openedSets.length === 0 && currentPlayer.openedPairs.length === 0,
-      noOneOpened: !players.some(p => p.hasOpened && p.id !== currentPlayer.id),
     };
   }
 
@@ -552,52 +568,75 @@ export const aiTakeTurn = (gameState: GameState): Partial<GameState> | null => {
 };
 
 export interface FinalScores { [playerId: string]: number; }
+export type FinishType = "normal" | "okey" | "elden" | "okeyElden";
+
+/**
+ * Bitiş türünü belirler:
+ * - "normal"    : Klasik perlerle bitiş → kazanan -101, ceza ×1
+ * - "okey"      : Son taşı Okey atarak bitiş → kazanan -202, ceza ×2
+ * - "elden"     : Hiç yer açmadan tek seferde bitiş → kazanan -202, ceza ×2
+ * - "okeyElden" : Hem elden hem okey atarak bitiş → kazanan -404, ceza ×4
+ */
+export const getFinishType = (
+  gameState: GameState,
+  finisherId: string | null,
+  discardedTile: Tile | null
+): FinishType => {
+  if (!finisherId || !discardedTile) return "normal";
+  const finisher = gameState.players.find(p => p.id === finisherId);
+  const isHandFinish = !!(finisher && finisher.openedSets.length === 0 && finisher.openedPairs.length === 0);
+  const isOkeyDiscard = isWildcard(discardedTile, gameState.okeyTile);
+  if (isHandFinish && isOkeyDiscard) return "okeyElden";
+  if (isHandFinish) return "elden";
+  if (isOkeyDiscard) return "okey";
+  return "normal";
+};
 
 export const calculateFinalScores = (gameState: GameState, finisherId: string | null, discardedTile: Tile | null): FinalScores => {
   const scores: FinalScores = {};
   const okeyTile = gameState.okeyTile;
-  let finishType: "normal" | "okey" | "pair" | "continuation" | "noOneContinuation" = "normal";
-  
-  if (finisherId && discardedTile) {
-    const finisher = gameState.players.find(p => p.id === finisherId);
-    const isOkeyDiscard = isWildcard(discardedTile, okeyTile);
-    const isPairFinish = finisher?.openedWithType === 'pairs';
-    const isContinuationDiscard = discardedTile && !isOkeyDiscard &&
-      gameState.players.some(p => p.openedSets.some(s => s.tiles.some(t => t.number === discardedTile.number && t.color !== discardedTile.color && !isWildcard(t, okeyTile))));
+  const finishType = getFinishType(gameState, finisherId, discardedTile);
 
-    if (gameState.noOneOpened && isContinuationDiscard) finishType = "noOneContinuation";
-    else if (isContinuationDiscard) finishType = "continuation";
-    else if (isOkeyDiscard) finishType = "okey";
-    else if (isPairFinish) finishType = "pair";
-  }
-
+  // Kazananın aldığı puan
   const winnerScore = (() => {
     switch (finishType) {
-      case "noOneContinuation": return -808;
-      case "continuation": return -404;
-      case "okey": case "pair": return -202;
-      default: return -101;
+      case "okeyElden": return -404;
+      case "okey":
+      case "elden":     return -202;
+      default:          return -101;
     }
   })();
 
-  let multiplier = 1;
-  if (gameState.mode === GameMode.FOLDING) {
-    if (gameState.hasDoubleOpen) multiplier *= 2;
-    if (gameState.hasOkeyDiscard) multiplier *= 2;
-    if (gameState.hasContinuationDiscard) multiplier *= 4;
-    if (gameState.hasHandFinish) multiplier *= 2;
-  }
+  // Diğer oyuncular için ceza çarpanı (bitiş türüne göre)
+  const penaltyMultiplier = (() => {
+    switch (finishType) {
+      case "okeyElden": return 4;
+      case "okey":
+      case "elden":     return 2;
+      default:          return 1;
+    }
+  })();
 
   gameState.players.forEach(player => {
-    const pairMultiplier = player.openedWithType === 'pairs' ? 2 : 1;
-    if (!player.hasOpened) scores[player.id] = 202 * multiplier;
-    else {
-      let handTotal = calculateHandTotal(player.hand, okeyTile);
-      const hasOkeyInHand = player.hand.some(t => t && isWildcard(t, okeyTile));
-      if (hasOkeyInHand) handTotal += 101;
-      scores[player.id] = handTotal * multiplier * pairMultiplier;
+    if (player.id === finisherId) {
+      // Kazanan oyuncu: bitiş puanını alır (negatif = iyi)
+      scores[player.id] = winnerScore;
+    } else {
+      // Diğer oyuncular
+      if (!player.hasOpened) {
+        // Açmayan oyuncu: 202 * çarpan
+        scores[player.id] = 202 * penaltyMultiplier;
+      } else {
+        // Açan oyuncu: eldeki taşların sayı toplamı * çarpan
+        let handTotal = calculateHandTotal(player.hand, okeyTile);
+        // Elinde okey varsa +101 ceza
+        const hasOkeyInHand = player.hand.some(t => t && isWildcard(t, okeyTile));
+        if (hasOkeyInHand) handTotal += 101;
+        scores[player.id] = handTotal * penaltyMultiplier;
+      }
+      // Oyun içi ek cezaları (işler taş atma vb.) ekle
+      if (player.score > 0) scores[player.id] += player.score;
     }
-    if (player.score > 0) scores[player.id] = (scores[player.id] || 0) + (player.score * multiplier * pairMultiplier);
   });
   return scores;
 };
@@ -605,11 +644,10 @@ export const calculateFinalScores = (gameState: GameState, finisherId: string | 
 export const getScoreExplanation = (score: number, isWinner: boolean, hasOpened: boolean, finishType?: string): string => {
   if (isWinner) {
     switch (finishType) {
-      case "noOneContinuation": return "Kimse açmadan devam atarak bitirdi!";
-      case "continuation": return "Devam atarak bitirdi!";
-      case "okey": return "OKEY ile bitirdi!";
-      case "pair": return "Çift ile bitirdi!";
-      default: return "Oyunu bitirdi!";
+      case "okeyElden": return "Elden + Okey ile bitirdi! (×4 ceza)";
+      case "okey":      return "Okey atarak bitirdi! (×2 ceza)";
+      case "elden":     return "Elden bitirdi! (×2 ceza)";
+      default:          return "Normal bitiş!";
     }
   }
   return hasOpened ? "Elindeki taşlar (ceza)" : "Açamadı (ceza)";
